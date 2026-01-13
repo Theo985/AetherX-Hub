@@ -1,0 +1,886 @@
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/accountsdaasa/uilibraryforkinggen/refs/heads/main/baseui.lua"))() 
+
+if not Library then return end
+
+local Window = Library:Window({
+    ConfigName = "DemonSoul.json"
+})
+
+local FarmingTab = Window:Tab("Farming")
+local CombatTab = Window:Tab("Combat")
+local TrainTab = Window:Tab("Train")
+local TeleportTab = Window:Tab("Teleport")
+local MiscTab = Window:Tab("Miscellaneous")
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+
+local GeneralAttack = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("GeneralAttack")
+local ChangeRole = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("ChangeRole")
+
+local AutoFarmEnabled = false
+local AutoAttackEnabled = false
+local AutoBossEnabled = false
+local AutoSpecificBossEnabled = false
+local AutoSpecificMobEnabled = false
+local NoclipEnabled = false
+local TweenSpeed = 150
+local AttackDelay = 0.05
+local IsAttacking = false
+local AttackConnection = nil
+local FarmConnection = nil
+local BossConnection = nil
+local SpecificBossConnection = nil
+local SpecificMobConnection = nil
+local NoclipConnection = nil
+local CurrentTarget = nil
+local CustomWalkSpeed = 16
+local WalkSpeedConnection = nil
+
+getgenv().SelectedSpecificMob = nil
+getgenv().SelectedSpecificBoss = nil
+local LastKilledMobs = {}
+
+local bossData = {
+    ["Level 22 Boss"] = {
+        position = Vector3.new(17182.576171875, 32, -1.92236328125),
+        level = 22
+    },
+    ["Level 70 Boss"] = {
+        position = Vector3.new(43.6435546875, 27, 66.0927734375),
+        level = 70
+    },
+    ["Level 75 Boss"] = {
+        position = Vector3.new(96.8603515625, 27, 99.36029052734375),
+        level = 75
+    },
+    ["Level 100 Boss"] = {
+        position = Vector3.new(439.24169921875, 29, 518.3402709960938),
+        level = 100
+    },
+    ["Level 120 Boss"] = {
+        position = Vector3.new(361.20068359375, 28, 716.452880859375),
+        level = 120
+    },
+    ["Mugen City Boss"] = {
+        position = Vector3.new(1446.0986328125, -460, 755.8096923828125),
+        level = 150
+    }
+}
+
+local mobData = {
+    ["Level 3 Mobs"] = {
+        position = Vector3.new(17270.56640625, 35, 560.1224975585938),
+        level = 3
+    },
+    ["Level 12 Mobs"] = {
+        position = Vector3.new(17235.169921875, 35, 51.51629638671875),
+        level = 12
+    },
+    ["Level 20 Mobs"] = {
+        position = Vector3.new(67.353515625, 30, -395.08367919921875),
+        level = 20
+    },
+    ["Level 40 Mobs"] = {
+        position = Vector3.new(293.78369140625, 30, -368.41632080078125),
+        level = 40
+    },
+    ["Level 45 Mobs"] = {
+        position = Vector3.new(-47.57421875, 35, -131.9117431640625),
+        level = 45
+    },
+    ["Level 50 Mobs"] = {
+        position = Vector3.new(-53.072265625, 35, 0.80230712890625),
+        level = 50
+    },
+    ["Level 55 Mobs"] = {
+        position = Vector3.new(176.888671875, 35, -41.07855224609375),
+        level = 55
+    },
+    ["Level 60 Mobs"] = {
+        position = Vector3.new(-225.8154296875, 45, 162.7550048828125),
+        level = 60
+    },
+    ["Level 70 Mobs"] = {
+        position = Vector3.new(357.994140625, 35, 354.98724365234375),
+        level = 70
+    },
+    ["Level 75 Mobs"] = {
+        position = Vector3.new(36.9912109375, 115, 323.09600830078125),
+        level = 75
+    },
+    ["Level 95 Mobs"] = {
+        position = Vector3.new(487.9677734375, 37, 1027.5789794921875),
+        level = 95
+    },
+    ["Fishing Area"] = {
+        position = Vector3.new(-461.94, 45, 343.19),
+        level = 0
+    }
+}
+
+function getPlayerLevel()
+    local character = LocalPlayer.Character
+    if character and character:FindFirstChild("HumanoidRootPart") then
+        local headUI = character.HumanoidRootPart:FindFirstChild("PlayerHeadUI")
+        if headUI and headUI:FindFirstChild("Level") then
+            local levelText = headUI.Level.Text
+            local level = tonumber(string.match(levelText, "%d+"))
+            return level or 1
+        end
+    end
+    return 1
+end
+
+function findAppropriateBoss(playerLevel)
+    local bestBoss = nil
+    local smallestDiff = math.huge
+    
+    for bossName, bossInfo in pairs(bossData) do
+        if bossName ~= "Mugen City Boss" then
+            local diff = math.abs(bossInfo.level - playerLevel)
+            if diff <= 5 and diff < smallestDiff then
+                smallestDiff = diff
+                bestBoss = bossName
+            end
+        end
+    end
+    
+    if not bestBoss then
+        for bossName, bossInfo in pairs(bossData) do
+            if bossName ~= "Mugen City Boss" then
+                local diff = math.abs(bossInfo.level - playerLevel)
+                if diff < smallestDiff then
+                    smallestDiff = diff
+                    bestBoss = bossName
+                end
+            end
+        end
+    end
+    
+    return bestBoss
+end
+
+function findMonstersByLevel(targetLevel)
+    local monsters = {}
+    for _, monster in pairs(Workspace.Monsters:GetChildren()) do
+        if monster:FindFirstChild("HumanoidRootPart") and monster.Humanoid.Health > 0 then
+            if monster:FindFirstChild("GhostLevel") then
+                local monsterLevel = monster.GhostLevel.Value
+                if monsterLevel == targetLevel then
+                    table.insert(monsters, monster)
+                end
+            end
+        end
+    end
+    return monsters
+end
+
+function findNearestMonsterByLevel(targetLevel)
+    local nearestMonster = nil
+    local nearestDistance = math.huge
+    local character = LocalPlayer.Character
+    
+    if not character or not character:FindFirstChild("HumanoidRootPart") then
+        return nil, nearestDistance
+    end
+    
+    local charPos = character.HumanoidRootPart.Position
+    
+    for _, monster in pairs(Workspace.Monsters:GetChildren()) do
+        if monster:FindFirstChild("HumanoidRootPart") and monster.Humanoid.Health > 0 then
+            if monster:FindFirstChild("GhostLevel") then
+                local monsterLevel = monster.GhostLevel.Value
+                if monsterLevel == targetLevel then
+                    local distance = (charPos - monster.HumanoidRootPart.Position).Magnitude
+                    if distance < nearestDistance and distance < 200 then
+                        nearestDistance = distance
+                        nearestMonster = monster
+                    end
+                end
+            end
+        end
+    end
+    
+    return nearestMonster, nearestDistance
+end
+
+function markMonsterAsKilled(monster)
+    if monster and monster:IsDescendantOf(Workspace) then
+        local monsterId = tostring(monster:GetDebugId())
+        LastKilledMobs[monsterId] = tick()
+        
+        for id, killTime in pairs(LastKilledMobs) do
+            if tick() - killTime > 10 then
+                LastKilledMobs[id] = nil
+            end
+        end
+    end
+end
+
+function wasRecentlyKilled(monster)
+    if not monster then return false end
+    local monsterId = tostring(monster:GetDebugId())
+    return LastKilledMobs[monsterId] ~= nil
+end
+
+function toggleNoclip(state)
+    NoclipEnabled = state
+    
+    if NoclipConnection then
+        NoclipConnection:Disconnect()
+        NoclipConnection = nil
+    end
+    
+    if state then
+        NoclipConnection = RunService.Stepped:Connect(function()
+            if LocalPlayer.Character then
+                for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
+    else
+        if LocalPlayer.Character then
+            for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = true
+                end
+            end
+        end
+    end
+end
+
+function applyWalkSpeed()
+    if WalkSpeedConnection then
+        WalkSpeedConnection:Disconnect()
+    end
+    
+    WalkSpeedConnection = RunService.Heartbeat:Connect(function()
+        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+            LocalPlayer.Character.Humanoid.WalkSpeed = CustomWalkSpeed
+        end
+    end)
+end
+
+function tweenToPosition(targetPosition)
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        return false
+    end
+    
+    local hrp = LocalPlayer.Character.HumanoidRootPart
+    local startPos = hrp.Position
+    local distance = (startPos - targetPosition).Magnitude
+    
+    if distance < 5 then
+        return true
+    end
+    
+    toggleNoclip(true)
+    
+    local travelTime = distance / TweenSpeed
+    local tweenInfo = TweenInfo.new(
+        travelTime,
+        Enum.EasingStyle.Linear,
+        Enum.EasingDirection.Out,
+        0,
+        false,
+        0
+    )
+    
+    local targetCFrame = CFrame.new(targetPosition.X, targetPosition.Y + 5, targetPosition.Z)
+    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
+    
+    local success = pcall(function()
+        tween:Play()
+    end)
+    
+    if not success then
+        toggleNoclip(false)
+        return false
+    end
+    
+    local completed = false
+    tween.Completed:Connect(function()
+        completed = true
+    end)
+    
+    local startTime = tick()
+    while not completed and tick() - startTime < travelTime + 3 do
+        task.wait(0.1)
+        if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            break
+        end
+    end
+    
+    task.wait(0.3)
+    toggleNoclip(false)
+    
+    return true
+end
+
+function spamAttacks()
+    if IsAttacking then return end
+    
+    IsAttacking = true
+    
+    spawn(function()
+        while IsAttacking do
+            for i = 1, 4 do
+                pcall(function()
+                    GeneralAttack:FireServer(i)
+                end)
+                task.wait(0.01)
+            end
+            task.wait(AttackDelay)
+        end
+    end)
+end
+
+function stopAttacks()
+    IsAttacking = false
+end
+
+function findNearestMonster()
+    local nearestMonster = nil
+    local nearestDistance = math.huge
+    local character = LocalPlayer.Character
+    
+    if not character or not character:FindFirstChild("HumanoidRootPart") then
+        return nil, nearestDistance
+    end
+    
+    local charPos = character.HumanoidRootPart.Position
+    
+    for _, monster in pairs(Workspace.Monsters:GetChildren()) do
+        if monster:FindFirstChild("HumanoidRootPart") and monster.Humanoid.Health > 0 then
+            local distance = (charPos - monster.HumanoidRootPart.Position).Magnitude
+            if distance < nearestDistance and distance < 200 then
+                nearestDistance = distance
+                nearestMonster = monster
+            end
+        end
+    end
+    
+    return nearestMonster, nearestDistance
+end
+
+function findBossAtPosition(bossPosition)
+    for _, monster in pairs(Workspace.Monsters:GetChildren()) do
+        if monster:FindFirstChild("HumanoidRootPart") and monster.Humanoid.Health > 0 then
+            local monsterPos = monster.HumanoidRootPart.Position
+            local distance = (monsterPos - bossPosition).Magnitude
+            if distance < 15 then
+                return monster
+            end
+        end
+    end
+    return nil
+end
+
+function stopAllConnections()
+    stopAttacks()
+    toggleNoclip(false)
+    
+    if FarmConnection then FarmConnection:Disconnect() FarmConnection = nil end
+    if AttackConnection then AttackConnection:Disconnect() AttackConnection = nil end
+    if BossConnection then BossConnection:Disconnect() BossConnection = nil end
+    if SpecificBossConnection then SpecificBossConnection:Disconnect() SpecificBossConnection = nil end
+    if SpecificMobConnection then SpecificMobConnection:Disconnect() SpecificMobConnection = nil end
+end
+
+FarmingTab:Toggle({
+    Name = "Auto Farm Mobs",
+    Flag = "AutoFarm",
+    Default = false,
+    
+    Condition = function()
+        return LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") and LocalPlayer.Character.Humanoid.Health > 0
+    end,
+    
+    Callback = function(Value)
+        AutoFarmEnabled = Value
+        
+        if FarmConnection then
+            FarmConnection:Disconnect()
+            FarmConnection = nil
+        end
+        
+        if Value then
+            FarmConnection = RunService.Heartbeat:Connect(function()
+                if not AutoFarmEnabled then return end
+                
+                local monster, distance = findNearestMonster()
+                
+                if monster and monster:FindFirstChild("HumanoidRootPart") then
+                    if monster.Humanoid.Health <= 0 then
+                        stopAttacks()
+                        markMonsterAsKilled(monster)
+                        task.wait(0.5)
+                        return
+                    end
+                    
+                    if wasRecentlyKilled(monster) then
+                        stopAttacks()
+                        task.wait(0.5)
+                        return
+                    end
+                    
+                    if distance > 15 then
+                        stopAttacks()
+                        local success = tweenToPosition(monster.HumanoidRootPart.Position)
+                        if success then
+                            task.wait(0.5)
+                        end
+                    else
+                        if not IsAttacking then
+                            spamAttacks()
+                        end
+                    end
+                else
+                    stopAttacks()
+                    task.wait(1)
+                end
+            end)
+        else
+            stopAllConnections()
+            LastKilledMobs = {}
+        end
+    end
+})
+
+FarmingTab:Toggle({
+    Name = "Auto Farm Boss",
+    Flag = "AutoBoss",
+    Default = false,
+    
+    Callback = function(Value)
+        AutoBossEnabled = Value
+        
+        if BossConnection then
+            BossConnection:Disconnect()
+            BossConnection = nil
+        end
+        
+        if Value then
+            BossConnection = RunService.Heartbeat:Connect(function()
+                if not AutoBossEnabled then return end
+                
+                local playerLevel = getPlayerLevel()
+                local bossToFarm = findAppropriateBoss(playerLevel)
+                
+                if bossToFarm then
+                    local bossInfo = bossData[bossToFarm]
+                    local bossPos = bossInfo.position
+                    
+                    local char = LocalPlayer.Character
+                    if char and char:FindFirstChild("HumanoidRootPart") then
+                        local distance = (char.HumanoidRootPart.Position - bossPos).Magnitude
+                        
+                        if distance > 20 then
+                            stopAttacks()
+                            tweenToPosition(bossPos)
+                            task.wait(1)
+                        else
+                            local bossMonster = findBossAtPosition(bossPos)
+                            
+                            if bossMonster then
+                                if bossMonster.Humanoid.Health > 0 then
+                                    if not IsAttacking then
+                                        spamAttacks()
+                                    end
+                                else
+                                    stopAttacks()
+                                    markMonsterAsKilled(bossMonster)
+                                    task.wait(3) 
+                                end
+                            else
+                                stopAttacks()
+                                task.wait(2)
+                            end
+                        end
+                    end
+                end
+            end)
+        else
+            stopAllConnections()
+            LastKilledMobs = {}
+        end
+    end
+})
+
+local specificBossDropdown = FarmingTab:Dropdown({
+    Name = "Select Specific Boss to Farm",
+    Flag = "SpecificBoss",
+    List = {"-- Select Boss --", "Level 22 Boss", "Level 70 Boss", "Level 75 Boss", "Level 100 Boss", "Level 120 Boss", "Mugen City Boss"},
+    Default = "-- Select Boss --",
+    Search = true,
+    Callback = function(Selected)
+        if Selected ~= "-- Select Boss --" then
+            getgenv().SelectedSpecificBoss = Selected
+        else
+            getgenv().SelectedSpecificBoss = nil
+        end
+    end
+})
+
+FarmingTab:Toggle({
+    Name = "Auto Farm Specific Boss",
+    Flag = "AutoSpecificBoss",
+    Default = false,
+    
+    Callback = function(Value)
+        AutoSpecificBossEnabled = Value
+        
+        if SpecificBossConnection then
+            SpecificBossConnection:Disconnect()
+            SpecificBossConnection = nil
+        end
+        
+        if Value then
+            if not getgenv().SelectedSpecificBoss or getgenv().SelectedSpecificBoss == "-- Select Boss --" then
+                AutoSpecificBossEnabled = false
+                return
+            end
+            
+            SpecificBossConnection = RunService.Heartbeat:Connect(function()
+                if not AutoSpecificBossEnabled then return end
+                
+                local selectedBoss = getgenv().SelectedSpecificBoss
+                local bossInfo = bossData[selectedBoss]
+                
+                if not bossInfo then
+                    stopAllConnections()
+                    return
+                end
+                
+                local bossPos = bossInfo.position
+                local char = LocalPlayer.Character
+                if char and char:FindFirstChild("HumanoidRootPart") then
+                    local distance = (char.HumanoidRootPart.Position - bossPos).Magnitude
+                    
+                    if distance > 20 then
+                        stopAttacks()
+                        tweenToPosition(bossPos)
+                        task.wait(0.5)
+                    else
+                        local bossMonster = findBossAtPosition(bossPos)
+                        
+                        if bossMonster then
+                            if bossMonster.Humanoid.Health > 0 then
+                                if not IsAttacking then
+                                    spamAttacks()
+                                end
+                            else
+                                stopAttacks()
+                                markMonsterAsKilled(bossMonster)
+                                task.wait(3) 
+                            end
+                        else
+                            stopAttacks()
+                            task.wait(2)
+                        end
+                    end
+                end
+            end)
+        else
+            stopAllConnections()
+            LastKilledMobs = {}
+        end
+    end
+})
+
+local specificMobDropdown = FarmingTab:Dropdown({
+    Name = "Select Specific Mob to Farm",
+    Flag = "SpecificMob",
+    List = {"-- Select Mob --", "Level 3 Mobs", "Level 12 Mobs", "Level 20 Mobs", "Level 40 Mobs", "Level 45 Mobs", 
+            "Level 50 Mobs", "Level 55 Mobs", "Level 60 Mobs", "Level 70 Mobs", "Level 75 Mobs", 
+            "Level 95 Mobs"},
+    Default = "-- Select Mob --",
+    Search = true,
+    Callback = function(Selected)
+        if Selected ~= "-- Select Mob --" then
+            getgenv().SelectedSpecificMob = Selected
+        else
+            getgenv().SelectedSpecificMob = nil
+        end
+    end
+})
+
+FarmingTab:Toggle({
+    Name = "Auto Farm Specific Mob",
+    Flag = "AutoSpecificMob",
+    Default = false,
+    
+    Callback = function(Value)
+        AutoSpecificMobEnabled = Value
+        
+        if SpecificMobConnection then
+            SpecificMobConnection:Disconnect()
+            SpecificMobConnection = nil
+        end
+        
+        if Value then
+            if not getgenv().SelectedSpecificMob or getgenv().SelectedSpecificMob == "-- Select Mob --" then
+                AutoSpecificMobEnabled = false
+                return
+            end
+            
+            SpecificMobConnection = RunService.Heartbeat:Connect(function()
+                if not AutoSpecificMobEnabled then return end
+                
+                local selectedMob = getgenv().SelectedSpecificMob
+                local mobInfo = mobData[selectedMob]
+                
+                if not mobInfo then
+                    stopAllConnections()
+                    return
+                end
+                
+                local targetLevel = mobInfo.level
+                local char = LocalPlayer.Character
+                
+                if char and char:FindFirstChild("HumanoidRootPart") then
+                    local monsters = findMonstersByLevel(targetLevel)
+                    
+                    if #monsters > 0 then
+                        local nearestMonster, nearestDistance = findNearestMonsterByLevel(targetLevel)
+                        
+                        if nearestMonster then
+                            if wasRecentlyKilled(nearestMonster) then
+                                stopAttacks()
+                                task.wait(0.5)
+                                return
+                            end
+                            
+                            if nearestMonster.Humanoid.Health <= 0 then
+                                stopAttacks()
+                                markMonsterAsKilled(nearestMonster)
+                                task.wait(0.5)
+                                return
+                            end
+                            
+                            local distance = nearestDistance
+                            
+                            if distance > 20 then
+                                stopAttacks()
+                                local success = tweenToPosition(nearestMonster.HumanoidRootPart.Position)
+                                if success then
+                                    task.wait(0.5)
+                                end
+                            else
+                                if not IsAttacking then
+                                    spamAttacks()
+                                end
+                            end
+                        end
+                    else
+                        stopAttacks()
+                        local mobPos = mobInfo.position
+                        local distance = (char.HumanoidRootPart.Position - mobPos).Magnitude
+                        
+                        if distance > 20 then
+                            tweenToPosition(mobPos)
+                            task.wait(1)
+                        else
+                            task.wait(2) 
+                        end
+                    end
+                end
+            end)
+        else
+            stopAllConnections()
+            LastKilledMobs = {}
+        end
+    end
+})
+
+FarmingTab:Slider({
+    Name = "Tween Speed",
+    Flag = "TweenSpeed",
+    Min = 50,
+    Max = 300,
+    Default = 150,
+    Callback = function(Value)
+        TweenSpeed = Value
+    end
+})
+
+FarmingTab:Slider({
+    Name = "Attack Speed (ms)",
+    Flag = "AttackSpeed",
+    Min = 10,
+    Max = 100,
+    Default = 50,
+    Callback = function(Value)
+        AttackDelay = Value / 1000
+    end
+})
+
+CombatTab:Toggle({
+    Name = "Auto Fast Attack",
+    Flag = "AutoAttack",
+    Default = false,
+    
+    Condition = function()
+        return LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") and LocalPlayer.Character.Humanoid.Health > 0
+    end,
+    
+    Callback = function(Value)
+        AutoAttackEnabled = Value
+        
+        if AttackConnection then
+            AttackConnection:Disconnect()
+            AttackConnection = nil
+        end
+        
+        if Value then
+            AttackConnection = RunService.Heartbeat:Connect(function()
+                if not AutoAttackEnabled then return end
+                
+                local monster, distance = findNearestMonster()
+                
+                if monster and distance < 30 then
+                    if not IsAttacking then
+                        spamAttacks()
+                    end
+                else
+                    stopAttacks()
+                end
+            end)
+        else
+            stopAttacks()
+        end
+    end
+})
+
+
+TrainTab:Label({
+    Text = "🚧 Coming Soon 🚧",
+    TextSize = 14,
+    Color = Color3.fromRGB(255, 165, 0)
+})
+
+TrainTab:Label({
+    Text = "Train are currently in development.",
+    TextSize = 12,
+    Color = Color3.fromRGB(200, 200, 200)
+})
+
+TrainTab:Label({
+    Text = "Check back in a update!",
+    TextSize = 12,
+    Color = Color3.fromRGB(200, 200, 200)
+})
+
+
+local zoneTeleportDropdown = TeleportTab:Dropdown({
+    Name = "Teleport to Zone",
+    Flag = "ZoneTeleport",
+    List = {"-- Select Zone --", "Level 3 Mobs", "Level 12 Mobs", "Level 20 Mobs", "Level 40 Mobs", "Level 45 Mobs", 
+            "Level 50 Mobs", "Level 55 Mobs", "Level 60 Mobs", "Level 70 Mobs", "Level 75 Mobs", 
+            "Level 95 Mobs", "Fishing Area"},
+    Default = "-- Select Zone --",
+    Search = true,
+    Callback = function(Selected)
+        if Selected ~= "-- Select Zone --" then
+            local mobInfo = mobData[Selected]
+            if mobInfo then
+                stopAttacks()
+                tweenToPosition(mobInfo.position)
+            end
+        end
+    end
+})
+
+local bossTeleportDropdown = TeleportTab:Dropdown({
+    Name = "Teleport to Boss",
+    Flag = "BossTeleport",
+    List = {"-- Select Boss --", "Level 22 Boss", "Level 70 Boss", "Level 75 Boss", "Level 100 Boss", "Level 120 Boss", "Mugen City Boss"},
+    Default = "-- Select Boss --",
+    Search = true,
+    Callback = function(Selected)
+        if Selected ~= "-- Select Boss --" then
+            local bossInfo = bossData[Selected]
+            if bossInfo then
+                stopAttacks()
+                tweenToPosition(bossInfo.position)
+            end
+        end
+    end
+})
+
+MiscTab:TextBox({
+    Name = "Custom WalkSpeed",
+    Flag = "SpeedBox",
+    Default = "16",
+    Placeholder = "Enter walk speed...",
+    Callback = function(Text)
+        local speed = tonumber(Text)
+        if speed then
+            CustomWalkSpeed = speed
+            applyWalkSpeed()
+        end
+    end
+})
+
+local characterDropdown = MiscTab:Dropdown({
+    Name = "Change Character",
+    Flag = "CharacterSelect",
+    List = {"-- Select Character --", "Sanemi Shinazugawa (24)", "Genya Shinazugawa (32)", "Inosuke Hashibira (2)", 
+            "Inosuke Hashibira Woman (29)", "Obanai Iguro (22)", "Daki (19)", "Gyutaro (20)", "Tengen Uzui (21)", 
+            "Giyu Tomioka (8)", "Sakonji Urokodaki (15)", "Nezuko Kamado (1)", "Nezuko Kamado demon (30)", 
+            "Gyomei Himejima (25)", "Yushiro (13)", "Zenitsu Agatsuma (5)", "Zenitsu Agatsuma Woman (28)", 
+            "Muichiro Tokito (23)", "Susamaru (11)", "Murata (31)", "Kanao Tsuyuri (16)", "Akaza (10)", 
+            "Tanjiro Kamado (3)", "Tanjiro Kamado Woman (27)", "Tanjiro Kamado Fire Form (6)", "Kyojuro Rengoku (9)", 
+            "Mitsuri Kanroji (17)", "Yabihane (12)", "Inadamae-dake (18)", "Douma (26)", "Kokushibo (4)", 
+            "Shinobu Kocho (7)", "Emnu (14)"},
+    Default = "-- Select Character --",
+    Search = true,
+    Callback = function(Selected)
+        if Selected ~= "-- Select Character --" then
+            local number = tonumber(string.match(Selected, "%((%d+)%)"))
+            if number then
+                ChangeRole:FireServer(number)
+            end
+        end
+    end
+})
+
+MiscTab:Button({
+    Name = "Stop",
+    Callback = function()
+        stopAllConnections()
+        AutoFarmEnabled = false
+        AutoAttackEnabled = false
+        AutoBossEnabled = false
+        AutoSpecificBossEnabled = false
+        AutoSpecificMobEnabled = false
+        LastKilledMobs = {}
+    end
+})
+
+Window:Init()
+applyWalkSpeed()
+
+game:GetService("Players").PlayerRemoving:Connect(function(player)
+    if player == LocalPlayer then
+        stopAllConnections()
+    end
+end)
+
+spawn(function()
+    while task.wait(5) do
+        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+            if LocalPlayer.Character.Humanoid.WalkSpeed ~= CustomWalkSpeed then
+                LocalPlayer.Character.Humanoid.WalkSpeed = CustomWalkSpeed
+            end
+        end
+    end
+end)
